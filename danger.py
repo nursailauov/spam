@@ -10,10 +10,10 @@ from collections import OrderedDict
 import danger_count_pb2
 import danger_generator_pb2
 from byte import Encrypt_ID, encrypt_api
-import re
 
 app = Flask(__name__)
 
+# Конфигурация регионов
 REGION_CONFIG = {
     'cis': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_cis.json'},
     'sg': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_sg.json'},
@@ -28,7 +28,8 @@ def load_tokens(region):
     except:
         return None
 
-def encrypt_message(plaintext_bytes):
+def encrypt_for_info(plaintext_bytes):
+    """Специфичное шифрование для получения никнейма"""
     key = b'Yg&tc%DEuh6%Zc^8'
     iv = b'6oyZDr22E3ychjM%'
     cipher = AES.new(key, AES.MODE_CBC, iv)
@@ -36,49 +37,64 @@ def encrypt_message(plaintext_bytes):
     return binascii.hexlify(cipher.encrypt(padded)).decode('utf-8')
 
 def get_player_info(uid, region):
+    """Получение ника именно ЦЕЛИ (UID)"""
     tokens = load_tokens(region)
     if not tokens: return f"Игрок {uid}", uid, region
     
     token = tokens[0]['token']
     config = REGION_CONFIG.get(region, REGION_CONFIG['cis'])
     
-    # Подготовка данных для ника
-    msg = danger_generator_pb2.danger_generator()
-    msg.saturn_ = int(uid)
-    msg.garena = 1
-    edata = bytes.fromhex(encrypt_message(msg.SerializeToString()))
-
-    headers = {
-        'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 11)",
-        'Authorization': f"Bearer {token}",
-        'Content-Type': "application/x-www-form-urlencoded"
-    }
-
     try:
-        res = requests.post(f"https://{config['domain']}/GetPlayerPersonalShow", data=edata, headers=headers, timeout=5)
+        # Формируем Protobuf запрос для UID цели
+        msg = danger_generator_pb2.danger_generator()
+        msg.saturn_ = int(uid)
+        msg.garena = 1
+        
+        # Шифруем данные
+        encrypted_data = bytes.fromhex(encrypt_for_info(msg.SerializeToString()))
+
+        headers = {
+            'User-Agent': "Dalvik/2.1.0",
+            'Authorization': f"Bearer {token}",
+            'Content-Type': "application/x-www-form-urlencoded"
+        }
+
+        url = f"https://{config['domain']}/GetPlayerPersonalShow"
+        res = requests.post(url, data=encrypted_data, headers=headers, timeout=7)
+        
         if res.status_code == 200:
             info = danger_count_pb2.Danger()
             info.ParseFromString(res.content)
-            name = json.loads(MessageToJson(info)).get("PlayerNickname")
-            if name: return name, uid, region
-    except:
-        pass
+            data = json.loads(MessageToJson(info))
+            
+            # Достаем никнейм цели из корня ответа
+            player_name = data.get("PlayerNickname")
+            if player_name:
+                return player_name, uid, region
+    except Exception as e:
+        print(f"Info Error: {e}")
+        
     return f"Игрок {uid}", uid, region
 
 def send_friend_request(uid, token, domain, results, lock):
+    """Чистый спам с использованием твоей логики из byte.py"""
     try:
-        # Важно: используем функции из byte.py
+        # 1. Шифруем ID через твой Encrypt_ID
         encrypted_id = Encrypt_ID(uid)
+        # 2. Формируем тело запроса
         payload = f"08a7c4839f1e10{encrypted_id}1801"
-        edata = bytes.fromhex(encrypt_api(payload))
+        # 3. Шифруем через твой encrypt_api
+        encrypted_payload = encrypt_api(payload)
         
+        url = f"https://{domain}/RequestAddingFriend"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "Dalvik/2.1.0"
+            "User-Agent": "Dalvik/2.1.0",
+            "ReleaseVersion": "OB52"
         }
 
-        response = requests.post(f"https://{domain}/RequestAddingFriend", data=edata, headers=headers, timeout=10)
+        response = requests.post(url, data=bytes.fromhex(encrypted_payload), headers=headers, timeout=10)
         
         with lock:
             if response.status_code == 200:
@@ -86,22 +102,25 @@ def send_friend_request(uid, token, domain, results, lock):
             else:
                 results['failed'] += 1
     except:
-        with lock: results['failed'] += 1
+        with lock:
+            results['failed'] += 1
 
 @app.route("/send_requests", methods=["GET"])
-def handle():
+def main_handler():
     uid = request.args.get("uid")
     region = request.args.get("region", "cis").lower()
 
-    if not uid: return Response("No UID", status=400)
+    if not uid:
+        return Response(json.dumps({"error": "No UID"}), mimetype="application/json")
 
     tokens = load_tokens(region)
-    if not tokens: return Response("No Tokens", status=400)
+    if not tokens:
+        return Response(json.dumps({"error": "No Tokens"}), mimetype="application/json")
 
-    # 1. Получаем ник
+    # ШАГ 1: Узнаем никнейм того, на кого спамим
     player_name, _, _ = get_player_info(uid, region)
 
-    # 2. Спам
+    # ШАГ 2: Запускаем спам-потоки
     config = REGION_CONFIG.get(region, REGION_CONFIG['cis'])
     results = {"success": 0, "failed": 0}
     lock = threading.Lock()
@@ -112,8 +131,10 @@ def handle():
         t.start()
         threads.append(t)
 
-    for t in threads: t.join()
+    for t in threads:
+        t.join()
 
+    # Финальный результат для бота
     return Response(json.dumps(OrderedDict([
         ("PlayerName", player_name),
         ("UID", uid),
