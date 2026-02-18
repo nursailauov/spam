@@ -1,4 +1,4 @@
-# app.py
+# danger.py
 from flask import Flask, request, Response
 import json
 import threading
@@ -11,6 +11,7 @@ from collections import OrderedDict
 import danger_count_pb2
 import danger_generator_pb2
 from byte import Encrypt_ID, encrypt_api
+import re # Добавили модуль для поиска имени в тексте
 
 app = Flask(__name__)
 
@@ -76,8 +77,9 @@ def decode_player_info(binary):
 def get_player_info(uid, region):
     """Get player info from specific region"""
     tokens = load_tokens(region)
+    # Если токены не загрузились, возвращаем заглушку, но не None
     if tokens is None:
-        return None, None, region
+        return f"Игрок {uid}", uid, region
 
     token = tokens[0]['token']
     config = REGION_CONFIG.get(region)
@@ -97,20 +99,48 @@ def get_player_info(uid, region):
         'ReleaseVersion': "OB52"
     }
 
-    response = requests.post(url, data=edata, headers=headers, verify=False, timeout=10)
+    try:
+        response = requests.post(url, data=edata, headers=headers, verify=False, timeout=10)
 
-    if response.status_code != 200:
-        return None, None, region
+        player_name = None
 
-    info = decode_player_info(response.content)
-    data = json.loads(MessageToJson(info))
+        if response.status_code == 200:
+            # 1. Попытка через Protobuf
+            try:
+                info = danger_count_pb2.Danger() # Используем базовый класс
+                info.ParseFromString(response.content)
+                data = json.loads(MessageToJson(info))
+                
+                # Ищем ник в разных местах JSON
+                player_name = data.get("PlayerNickname")
+                if not player_name:
+                    player_name = data.get("AccountInfo", {}).get("PlayerNickname")
+            except:
+                pass
 
-    account = data.get("AccountInfo", {})
+            # 2. Попытка через Regex (если Protobuf не сработал)
+            if not player_name:
+                try:
+                    raw_text = response.content.decode('utf-8', errors='ignore')
+                    # Ищем текстовый паттерн ника (буквы, цифры, пробелы, длина от 3 до 14)
+                    match = re.search(r'\b[A-Za-z0-9\s_]{3,14}\b', raw_text)
+                    if match:
+                        candidate = match.group(0)
+                        # Фильтруем технические слова
+                        if "OB52" not in candidate and "Unity" not in candidate:
+                            player_name = candidate
+                except:
+                    pass
 
-    player_name = account.get("PlayerNickname", "Unknown")
-    player_uid = account.get("UID", uid)
+        # Если имя так и не нашли, ставим ID
+        if not player_name or player_name == "Unknown":
+            player_name = f"Игрок {uid}"
 
-    return player_name, player_uid, region
+        return player_name, uid, region
+
+    except Exception as e:
+        print(f"Error getting info: {e}")
+        return f"Игрок {uid}", uid, region
 
 def send_friend_request(uid, token, domain, results, lock):
     """Send friend request to specific domain"""
@@ -161,6 +191,7 @@ def handle_friend_request():
         return Response(json.dumps({"error": f"Token file for region {region} not found"}), 
                        mimetype="application/json")
 
+    # Получаем имя игрока (теперь функция безопасна)
     player_name, player_uid, region = get_player_info(uid, region)
 
     config = REGION_CONFIG.get(region)
@@ -170,6 +201,7 @@ def handle_friend_request():
     lock = threading.Lock()
     threads = []
 
+    # Запускаем потоки для спама
     for i in range(min(100, len(tokens))):
         token = tokens[i]['token']
         thread = threading.Thread(target=send_friend_request, args=(uid, token, domain, results, lock))
@@ -181,7 +213,7 @@ def handle_friend_request():
 
     output = OrderedDict([
         ("PlayerName", player_name),
-        ("UID", player_uid),
+        ("UID", uid),
         ("Region", region.upper()),
         ("Success", results["success"]),
         ("Failed", results["failed"]),
