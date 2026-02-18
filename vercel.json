@@ -1,15 +1,22 @@
 {
-    "builds": [
-        {
-            "src": "danger.py",
-            "use": "@vercel/python"
-        }
-    ],
-    "routes": [
-        {
-            "src": "/(.*)",
-            "dest": "danger.py"
-        }
-    ],
-    "regions": ["bom1"]
+  "builds": [
+    {
+      "src": "danger.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/send_requests",
+      "dest": "danger.py"
+    },
+    {
+      "src": "/regions",
+      "dest": "danger.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "danger.py"
+    }
+  ]
 }
