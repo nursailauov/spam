@@ -1,3 +1,4 @@
+# app.py
 from flask import Flask, request, Response
 import json
 import threading
@@ -13,136 +14,188 @@ from byte import Encrypt_ID, encrypt_api
 
 app = Flask(__name__)
 
-# Конфигурация регионов
+# Region configuration mapping
 REGION_CONFIG = {
-    'cis': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_cis.json'},
+    'ind': {'domain': 'client.ind.freefiremobile.com', 'token_file': 'tokens_ind.json'},
+    'br': {'domain': 'client.us.freefiremobile.com', 'token_file': 'tokens_br.json'},
+    'us': {'domain': 'client.us.freefiremobile.com', 'token_file': 'tokens_us.json'},
+    'na': {'domain': 'client.us.freefiremobile.com', 'token_file': 'tokens_na.json'},
+    'sac': {'domain': 'client.us.freefiremobile.com', 'token_file': 'tokens_sac.json'},
+    'pk': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_pk.json'},
     'sg': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_sg.json'},
+    'bd': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_bd.json'},
+    'vn': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_vn.json'},
+    'me': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_me.json'},
+    'eu': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_eu.json'},
+    'id': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_id.json'},
+    'th': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_th.json'},
+    'tw': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_tw.json'},
+    'cis': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_cis.json'},
     'ru': {'domain': 'clientbp.ggpolarbear.com', 'token_file': 'tokens_ru.json'}
 }
 
 def load_tokens(region):
+    """Load tokens for specific region"""
     try:
-        config = REGION_CONFIG.get(region, REGION_CONFIG['cis'])
+        config = REGION_CONFIG.get(region)
+        if not config:
+            return None
+            
         with open(config['token_file'], "r") as f:
             return json.load(f)
     except:
         return None
 
-def encrypt_for_info(plaintext_bytes):
-    """Специфичное шифрование для получения никнейма"""
+def encrypt_message(plaintext_bytes):
+    """AES encryption for all regions"""
     key = b'Yg&tc%DEuh6%Zc^8'
     iv = b'6oyZDr22E3ychjM%'
     cipher = AES.new(key, AES.MODE_CBC, iv)
     padded = pad(plaintext_bytes, AES.block_size)
-    return binascii.hexlify(cipher.encrypt(padded)).decode('utf-8')
+    encrypted = cipher.encrypt(padded)
+    return binascii.hexlify(encrypted).decode('utf-8')
+
+def create_uid_protobuf(uid):
+    """Create protobuf message for UID"""
+    msg = danger_generator_pb2.danger_generator()
+    msg.saturn_ = int(uid)
+    msg.garena = 1
+    return msg.SerializeToString()
+
+def enc(uid):
+    """Encrypt UID for API request"""
+    pb = create_uid_protobuf(uid)
+    return encrypt_message(pb)
+
+def decode_player_info(binary):
+    """Decode player info from protobuf"""
+    info = danger_count_pb2.Danger_ff_like()
+    info.ParseFromString(binary)
+    return info
 
 def get_player_info(uid, region):
-    """Получение ника именно ЦЕЛИ (UID)"""
+    """Get player info from specific region"""
     tokens = load_tokens(region)
-    if not tokens: return f"Игрок {uid}", uid, region
-    
+    if tokens is None:
+        return None, None, region
+
     token = tokens[0]['token']
-    config = REGION_CONFIG.get(region, REGION_CONFIG['cis'])
-    
-    try:
-        # Формируем Protobuf запрос для UID цели
-        msg = danger_generator_pb2.danger_generator()
-        msg.saturn_ = int(uid)
-        msg.garena = 1
-        
-        # Шифруем данные
-        encrypted_data = bytes.fromhex(encrypt_for_info(msg.SerializeToString()))
+    config = REGION_CONFIG.get(region)
+    url = f"https://{config['domain']}/GetPlayerPersonalShow"
 
-        headers = {
-            'User-Agent': "Dalvik/2.1.0",
-            'Authorization': f"Bearer {token}",
-            'Content-Type': "application/x-www-form-urlencoded"
-        }
+    encrypted_uid = enc(uid)
+    edata = bytes.fromhex(encrypted_uid)
 
-        url = f"https://{config['domain']}/GetPlayerPersonalShow"
-        res = requests.post(url, data=encrypted_data, headers=headers, timeout=7)
-        
-        if res.status_code == 200:
-            info = danger_count_pb2.Danger()
-            info.ParseFromString(res.content)
-            data = json.loads(MessageToJson(info))
-            
-            # Достаем никнейм цели из корня ответа
-            player_name = data.get("PlayerNickname")
-            if player_name:
-                return player_name, uid, region
-    except Exception as e:
-        print(f"Info Error: {e}")
-        
-    return f"Игрок {uid}", uid, region
+    headers = {
+        'User-Agent': "Dalvik/2.1.0",
+        'Connection': "Keep-Alive",
+        'Accept-Encoding': "gzip",
+        'Authorization': f"Bearer {token}",
+        'Content-Type': "application/x-www-form-urlencoded",
+        'X-Unity-Version': "2018.4.11f1",
+        'X-GA': "v1 1",
+        'ReleaseVersion': "OB52"
+    }
+
+    response = requests.post(url, data=edata, headers=headers, verify=False, timeout=10)
+
+    if response.status_code != 200:
+        return None, None, region
+
+    info = decode_player_info(response.content)
+    data = json.loads(MessageToJson(info))
+
+    account = data.get("AccountInfo", {})
+
+    player_name = account.get("PlayerNickname", "Unknown")
+    player_uid = account.get("UID", uid)
+
+    return player_name, player_uid, region
 
 def send_friend_request(uid, token, domain, results, lock):
-    """Чистый спам с использованием твоей логики из byte.py"""
+    """Send friend request to specific domain"""
     try:
-        # 1. Шифруем ID через твой Encrypt_ID
         encrypted_id = Encrypt_ID(uid)
-        # 2. Формируем тело запроса
         payload = f"08a7c4839f1e10{encrypted_id}1801"
-        # 3. Шифруем через твой encrypt_api
         encrypted_payload = encrypt_api(payload)
         
         url = f"https://{domain}/RequestAddingFriend"
+
         headers = {
             "Authorization": f"Bearer {token}",
+            "X-Unity-Version": "2018.4.11f1",
+            "X-GA": "v1 1",
+            "ReleaseVersion": "OB52",
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "Dalvik/2.1.0",
-            "ReleaseVersion": "OB52"
+            "User-Agent": "Dalvik/2.1.0"
         }
 
         response = requests.post(url, data=bytes.fromhex(encrypted_payload), headers=headers, timeout=10)
-        
+
         with lock:
             if response.status_code == 200:
                 results['success'] += 1
             else:
                 results['failed'] += 1
+
     except:
         with lock:
             results['failed'] += 1
 
 @app.route("/send_requests", methods=["GET"])
-def main_handler():
+def handle_friend_request():
+    """Handle friend requests with region support"""
     uid = request.args.get("uid")
-    region = request.args.get("region", "cis").lower()
+    region = request.args.get("region", "ind")  # Default to IND if not specified
 
     if not uid:
-        return Response(json.dumps({"error": "No UID"}), mimetype="application/json")
+        return Response(json.dumps({"error": "uid required"}), mimetype="application/json")
+
+    # Validate region
+    if region not in REGION_CONFIG:
+        return Response(json.dumps({"error": f"Invalid region. Supported: {', '.join(REGION_CONFIG.keys())}"}), 
+                       mimetype="application/json")
 
     tokens = load_tokens(region)
-    if not tokens:
-        return Response(json.dumps({"error": "No Tokens"}), mimetype="application/json")
+    if tokens is None:
+        return Response(json.dumps({"error": f"Token file for region {region} not found"}), 
+                       mimetype="application/json")
 
-    # ШАГ 1: Узнаем никнейм того, на кого спамим
-    player_name, _, _ = get_player_info(uid, region)
+    player_name, player_uid, region = get_player_info(uid, region)
 
-    # ШАГ 2: Запускаем спам-потоки
-    config = REGION_CONFIG.get(region, REGION_CONFIG['cis'])
+    config = REGION_CONFIG.get(region)
+    domain = config['domain']
+
     results = {"success": 0, "failed": 0}
     lock = threading.Lock()
     threads = []
 
     for i in range(min(100, len(tokens))):
-        t = threading.Thread(target=send_friend_request, args=(uid, tokens[i]['token'], config['domain'], results, lock))
-        t.start()
-        threads.append(t)
+        token = tokens[i]['token']
+        thread = threading.Thread(target=send_friend_request, args=(uid, token, domain, results, lock))
+        thread.start()
+        threads.append(thread)
 
-    for t in threads:
-        t.join()
+    for thread in threads:
+        thread.join()
 
-    # Финальный результат для бота
-    return Response(json.dumps(OrderedDict([
+    output = OrderedDict([
         ("PlayerName", player_name),
-        ("UID", uid),
+        ("UID", player_uid),
         ("Region", region.upper()),
         ("Success", results["success"]),
         ("Failed", results["failed"]),
         ("Status", 1 if results["success"] > 0 else 2)
-    ])), mimetype="application/json")
+    ])
+
+    return Response(json.dumps(output), mimetype="application/json")
+
+@app.route("/regions", methods=["GET"])
+def list_regions():
+    """List all available regions"""
+    regions = [{"code": code, "domain": config['domain'], "token_file": config['token_file']} 
+               for code, config in REGION_CONFIG.items()]
+    return Response(json.dumps({"regions": regions}), mimetype="application/json")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(debug=True, host="0.0.0.0", port=5000)
