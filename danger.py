@@ -107,7 +107,7 @@ def get_player_info(uid, region):
 
     account = data.get("AccountInfo", {})
 
-    player_name = account.get("PlayerNickname", "Unknown")
+    player_name = account.get("PlayerNickname", f"Игрок {uid}")
     player_uid = account.get("UID", uid)
 
     return player_name, player_uid, region
