@@ -107,7 +107,7 @@ def get_player_info(uid, region):
 
     account = data.get("AccountInfo", {})
 
-    player_name = account.get("PlayerNickname", f"Игрок {uid}")
+    player_name = account.get("PlayerNickname", "Unknown")
     player_uid = account.get("UID", uid)
 
     return player_name, player_uid, region
@@ -180,7 +180,7 @@ def handle_friend_request():
         thread.join()
 
     output = OrderedDict([
-        ("PlayerName", player_name),
+        ("PlayerName", {player_name}),
         ("UID", player_uid),
         ("Region", region.upper()),
         ("Success", results["success"]),
