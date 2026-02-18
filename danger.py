@@ -180,7 +180,7 @@ def handle_friend_request():
         thread.join()
 
     output = OrderedDict([
-        ("PlayerName", {player_name}),
+        ("PlayerName", player_name),
         ("UID", player_uid),
         ("Region", region.upper()),
         ("Success", results["success"]),
